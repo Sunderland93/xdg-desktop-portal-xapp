@@ -1,0 +1,371 @@
+/*
+ * Copyright © 2017 Red Hat, Inc
+ * Copyright © 2026 Linux Mint Team
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+#include "config.h"
+
+#include <gio/gio.h>
+#include <glib-object.h>
+#include <stdint.h>
+
+#include "xdg-desktop-portal-dbus.h"
+
+#include "screencast.h"
+#include "cinnamonscreencast.h"
+#include "displaystatetracker.h"
+#include "request.h"
+#include "session.h"
+#include "utils.h"
+
+typedef struct _ScreenCastDialogHandle ScreenCastDialogHandle;
+
+typedef struct _ScreenCastSession
+{
+    Session parent;
+
+    CinnamonScreenCastSession *cinnamon_screen_cast_session;
+    gulong session_ready_handler_id;
+    gulong session_closed_handler_id;
+
+    char *parent_window;
+
+    ScreenCastSelection select;
+
+    GDBusMethodInvocation *start_invocation;
+    ScreenCastDialogHandle *dialog_handle;
+} ScreenCastSession;
+
+typedef struct _ScreenCastSessionClass
+{
+    SessionClass parent_class;
+} ScreenCastSessionClass;
+
+typedef struct _ScreenCastDialogHandle
+{
+    Request *request;
+    ScreenCastSession *session;
+
+    int response;
+} ScreenCastDialogHandle;
+
+static GDBusConnection *impl_connection;
+static GDBusInterfaceSkeleton *impl;
+
+static CinnamonScreenCast *cinnamon_screen_cast;
+
+GType screen_cast_session_get_type (void);
+G_DEFINE_TYPE (ScreenCastSession, screen_cast_session, session_get_type ())
+
+static gboolean
+is_screen_cast_session (Session *session)
+{
+    return G_TYPE_CHECK_INSTANCE_TYPE (session, screen_cast_session_get_type ());
+}
+
+static gboolean
+handle_start (XdpImplScreenCast     *object,
+              GDBusMethodInvocation *invocation,
+              const char            *arg_handle,
+              const char            *arg_session_handle,
+              const char            *arg_app_id,
+              const char            *arg_parent_window,
+              GVariant              *arg_options)
+{
+    const char *sender;
+    g_autoptr(Request) request = NULL;
+    ScreenCastSession *screen_cast_session;
+    GVariantBuilder results_builder;
+
+    sender = g_dbus_method_invocation_get_sender (invocation);
+    request = request_new (sender, arg_app_id, arg_handle);
+    request_export (request,
+                    g_dbus_method_invocation_get_connection (invocation));
+
+    screen_cast_session =
+    (ScreenCastSession *)lookup_session (arg_session_handle);
+    if (!screen_cast_session)
+      {
+        g_warning ("Attempted to start non existing screen cast session");
+        goto err;
+      }
+
+    if (screen_cast_session->dialog_handle)
+      {
+        g_warning ("Screen cast dialog already open");
+        goto err;
+      }
+
+    screen_cast_session->start_invocation = invocation;
+
+    return TRUE;
+
+    err:
+    g_variant_builder_init (&results_builder, G_VARIANT_TYPE ("a(ua{sv}"));
+    xdp_impl_screen_cast_complete_start (object, invocation, 2,
+                                         g_variant_builder_end (&results_builder));
+
+    return TRUE;
+}
+
+static gboolean
+handle_select_sources (XdpImplScreenCast     *object,
+                       GDBusMethodInvocation *invocation,
+                       const char            *arg_handle,
+                       const char            *arg_session_handle,
+                       const char            *arg_app_id,
+                       GVariant              *arg_options)
+{
+    Session *session;
+    int response;
+    uint32_t types;
+    gboolean multiple;
+    ScreenCastCursorMode cursor_mode;
+    ScreenCastSelection select;
+    GVariantBuilder results_builder;
+    GVariant *results;
+
+    session = lookup_session (arg_session_handle);
+    if (!session)
+      {
+        g_warning ("Tried to select sources on non-existing %s", arg_session_handle);
+        response = 2;
+        goto out;
+      }
+
+    if (!g_variant_lookup (arg_options, "multiple", "b", &multiple))
+        multiple = FALSE;
+
+    if (!g_variant_lookup (arg_options, "types", "u", &types))
+        types = SCREEN_CAST_SOURCE_TYPE_MONITOR;
+
+    if (!(types & (SCREEN_CAST_SOURCE_TYPE_MONITOR)))
+      {
+        g_warning ("Unknown screen cast source type");
+        response = 2;
+        goto out;
+      }
+
+    if (!g_variant_lookup (arg_options, "cursor_mode", "u", &cursor_mode))
+        cursor_mode = SCREEN_CAST_CURSOR_MODE_HIDDEN;
+
+    switch (cursor_mode)
+      {
+        case SCREEN_CAST_CURSOR_MODE_HIDDEN:
+        case SCREEN_CAST_CURSOR_MODE_EMBEDDED:
+        case SCREEN_CAST_CURSOR_MODE_METADATA:
+            break;
+        default:
+            g_warning ("Unknown screen cast cursor mode");
+            response = 2;
+            goto out;
+      }
+
+    select.multiple = multiple;
+    select.source_types = types;
+    select.cursor_mode = cursor_mode;
+
+    if (is_screen_cast_session (session))
+      {
+        ScreenCastSession *screen_cast_session = (ScreenCastSession *)session;
+
+        screen_cast_session->select = select;
+        response = 0;
+      }
+    else
+      {
+        g_warning ("Tried to select sources on invalid session type");
+        response = 2;
+      }
+
+    out:
+    g_variant_builder_init (&results_builder, G_VARIANT_TYPE_VARDICT);
+    results = g_variant_builder_end (&results_builder);
+    xdp_impl_screen_cast_complete_select_sources (object, invocation,
+                                                  response, results);
+
+    return TRUE;
+}
+
+static gboolean
+handle_create_session (XdpImplScreenCast     *object,
+                       GDBusMethodInvocation *invocation,
+                       const char            *arg_handle,
+                       const char            *arg_session_handle,
+                       const char            *arg_app_id,
+                       GVariant              *arg_options)
+{
+    g_autoptr(GError) error = NULL;
+    int response;
+    Session *session;
+    GVariantBuilder results_builder;
+
+    session = g_object_new (screen_cast_session_get_type (),
+                            "id", arg_session_handle,
+                            NULL);
+
+    if (!session_export (session,
+        g_dbus_method_invocation_get_connection (invocation),
+                         &error))
+      {
+        g_clear_object (&session);
+        g_warning ("Failed to create screen cast session: %s", error->message);
+        response = 2;
+        goto out;
+      }
+
+    response = 0;
+
+    out:
+    g_variant_builder_init (&results_builder, G_VARIANT_TYPE_VARDICT);
+    xdp_impl_screen_cast_complete_create_session (object,
+                                                  invocation,
+                                                  response,
+                                                  g_variant_builder_end (&results_builder));
+
+    return TRUE;
+}
+
+static void
+on_cinnamon_screen_cast_enabled (CinnamonScreenCast *cinnamon_screen_cast)
+{
+    int cinnamon_api_version;
+    ScreenCastSourceType available_source_types;
+    ScreenCastCursorMode available_cursor_modes;
+    g_autoptr(GError) error = NULL;
+
+    impl = G_DBUS_INTERFACE_SKELETON (xdp_impl_screen_cast_skeleton_new ());
+
+    g_signal_connect (impl, "handle-create-session",
+                      G_CALLBACK (handle_create_session), NULL);
+    g_signal_connect (impl, "handle-select-sources",
+                      G_CALLBACK (handle_select_sources), NULL);
+    g_signal_connect (impl, "handle-start",
+                      G_CALLBACK (handle_start), NULL);
+
+    cinnamon_api_version = cinnamon_screen_cast_get_api_version (cinnamon_screen_cast);
+
+    available_source_types = SCREEN_CAST_SOURCE_TYPE_MONITOR;
+    g_object_set (G_OBJECT (impl),
+                  "available-source-types", available_source_types,
+                  NULL);
+
+    available_cursor_modes = SCREEN_CAST_CURSOR_MODE_NONE;
+    if (cinnamon_api_version >= 2)
+      {
+        available_cursor_modes |= SCREEN_CAST_CURSOR_MODE_HIDDEN |
+        SCREEN_CAST_CURSOR_MODE_EMBEDDED |
+        SCREEN_CAST_CURSOR_MODE_METADATA;
+      }
+    g_object_set (G_OBJECT (impl),
+                  "available-cursor-modes", available_cursor_modes,
+                  NULL);
+
+    if (!g_dbus_interface_skeleton_export (impl,
+        impl_connection,
+        DESKTOP_PORTAL_OBJECT_PATH,
+        &error))
+      {
+        g_warning ("Failed to export screen cast portal implementation object: %s",
+                   error->message);
+        return;
+      }
+
+    g_debug ("providing %s", g_dbus_interface_skeleton_get_info (impl)->name);
+}
+
+static void
+on_cinnamon_screen_cast_disabled (GDBusConnection *connection,
+                               const char *name,
+                               gpointer user_data)
+{
+    if (impl)
+      {
+        g_debug ("unproviding %s", g_dbus_interface_skeleton_get_info (impl)->name);
+
+        g_dbus_interface_skeleton_unexport (impl);
+        g_clear_object (&impl);
+      }
+}
+
+static void
+screen_cast_session_close (Session *session)
+{
+    ScreenCastSession *screen_cast_session = (ScreenCastSession *)session;
+    CinnamonScreenCastSession *cinnamon_screen_cast_session;
+    g_autoptr(GError) error = NULL;
+
+    cinnamon_screen_cast_session = screen_cast_session->cinnamon_screen_cast_session;
+    if (cinnamon_screen_cast_session)
+    {
+        g_signal_handler_disconnect (cinnamon_screen_cast_session,
+                                     screen_cast_session->session_ready_handler_id);
+        g_signal_handler_disconnect (cinnamon_screen_cast_session,
+                                     screen_cast_session->session_closed_handler_id);
+        if (!cinnamon_screen_cast_session_stop (cinnamon_screen_cast_session,
+            &error))
+          {
+            g_warning ("Failed to close GNOME screen cast session: %s",
+                       error->message);
+            g_clear_object (&screen_cast_session->cinnamon_screen_cast_session);
+          }
+    }
+}
+
+static void
+screen_cast_session_finalize (GObject *object)
+{
+    ScreenCastSession *screen_cast_session = (ScreenCastSession *)object;
+
+    g_clear_object (&screen_cast_session->cinnamon_screen_cast_session);
+
+    G_OBJECT_CLASS (screen_cast_session_parent_class)->finalize (object);
+}
+
+static void
+screen_cast_session_init (ScreenCastSession *screen_cast_session)
+{
+}
+
+static void
+screen_cast_session_class_init (ScreenCastSessionClass *klass)
+{
+    GObjectClass *gobject_class;
+    SessionClass *session_class;
+
+    gobject_class = (GObjectClass *)klass;
+    gobject_class->finalize = screen_cast_session_finalize;
+
+    session_class = (SessionClass *)klass;
+    session_class->close = screen_cast_session_close;
+}
+
+
+gboolean
+screen_cast_init (GDBusConnection  *connection,
+                  GError          **error)
+{
+    impl_connection = connection;
+    cinnamon_screen_cast = cinnamon_screen_cast_new (connection);
+
+    g_signal_connect (cinnamon_screen_cast, "enabled",
+                      G_CALLBACK (on_cinnamon_screen_cast_enabled), NULL);
+    g_signal_connect (cinnamon_screen_cast, "disabled",
+                      G_CALLBACK (on_cinnamon_screen_cast_disabled), NULL);
+
+    return TRUE;
+}
