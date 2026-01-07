@@ -247,10 +247,10 @@ cinnamon_screen_cast_session_add_stream_properties (CinnamonScreenCastSession *c
                                        "size",
                                        g_variant_new ("(ii)", width, height));
 
-            pipewire_node_id = cinnamon_screen_cast_stream_get_pipewire_node_id (stream);
-            g_variant_builder_add (streams_builder, "(ua{sv})",
-                                   pipewire_node_id,
-                                   &stream_properties_builder);
+        pipewire_node_id = cinnamon_screen_cast_stream_get_pipewire_node_id (stream);
+        g_variant_builder_add (streams_builder, "(ua{sv})",
+                               pipewire_node_id,
+                               &stream_properties_builder);
       }
 }
 
