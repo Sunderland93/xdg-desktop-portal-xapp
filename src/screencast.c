@@ -32,8 +32,6 @@
 #include "session.h"
 #include "utils.h"
 
-typedef struct _ScreenCastDialogHandle ScreenCastDialogHandle;
-
 typedef struct _ScreenCastSession
 {
     Session parent;
@@ -47,21 +45,12 @@ typedef struct _ScreenCastSession
     ScreenCastSelection select;
 
     GDBusMethodInvocation *start_invocation;
-    ScreenCastDialogHandle *dialog_handle;
 } ScreenCastSession;
 
 typedef struct _ScreenCastSessionClass
 {
     SessionClass parent_class;
 } ScreenCastSessionClass;
-
-typedef struct _ScreenCastDialogHandle
-{
-    Request *request;
-    ScreenCastSession *session;
-
-    int response;
-} ScreenCastDialogHandle;
 
 static GDBusConnection *impl_connection;
 static GDBusInterfaceSkeleton *impl;
@@ -101,12 +90,6 @@ handle_start (XdpImplScreenCast     *object,
     if (!screen_cast_session)
       {
         g_warning ("Attempted to start non existing screen cast session");
-        goto err;
-      }
-
-    if (screen_cast_session->dialog_handle)
-      {
-        g_warning ("Screen cast dialog already open");
         goto err;
       }
 
@@ -152,13 +135,6 @@ handle_select_sources (XdpImplScreenCast     *object,
 
     if (!g_variant_lookup (arg_options, "types", "u", &types))
         types = SCREEN_CAST_SOURCE_TYPE_MONITOR;
-
-    if (!(types & (SCREEN_CAST_SOURCE_TYPE_MONITOR)))
-      {
-        g_warning ("Unknown screen cast source type");
-        response = 2;
-        goto out;
-      }
 
     if (!g_variant_lookup (arg_options, "cursor_mode", "u", &cursor_mode))
         cursor_mode = SCREEN_CAST_CURSOR_MODE_HIDDEN;

@@ -242,12 +242,12 @@ cinnamon_screen_cast_session_add_stream_properties (CinnamonScreenCastSession *c
             g_variant_builder_add (&stream_properties_builder, "{sv}",
                                    "position",
                                    g_variant_new ("(ii)", x, y));
-            if (cinnamon_screen_cast_stream_get_size (stream, &width, &height))
+        if (cinnamon_screen_cast_stream_get_size (stream, &width, &height))
                 g_variant_builder_add (&stream_properties_builder, "{sv}",
                                        "size",
                                        g_variant_new ("(ii)", width, height));
 
-                pipewire_node_id = cinnamon_screen_cast_stream_get_pipewire_node_id (stream);
+            pipewire_node_id = cinnamon_screen_cast_stream_get_pipewire_node_id (stream);
             g_variant_builder_add (streams_builder, "(ua{sv})",
                                    pipewire_node_id,
                                    &stream_properties_builder);
@@ -304,21 +304,21 @@ cinnamon_screen_cast_session_record_monitor (CinnamonScreenCastSession *cinnamon
     properties = g_variant_builder_end (&properties_builder);
 
     if (!org_cinnamon_muffin_screen_cast_session_call_record_monitor_sync (session_proxy,
-        connector,
-        properties,
-        &stream_path,
-        NULL,
-        error))
+                                                                           connector,
+                                                                           properties,
+                                                                           &stream_path,
+                                                                           NULL,
+                                                                           error))
         return FALSE;
 
     connection = g_dbus_proxy_get_connection (G_DBUS_PROXY (session_proxy));
     stream_proxy =
     org_cinnamon_muffin_screen_cast_stream_proxy_new_sync (connection,
-                                                        G_DBUS_PROXY_FLAGS_DO_NOT_AUTO_START,
-                                                        "org.cinnamon.Muffin.ScreenCast",
-                                                        stream_path,
-                                                        NULL,
-                                                        error);
+                                                           G_DBUS_PROXY_FLAGS_DO_NOT_AUTO_START,
+                                                           "org.cinnamon.Muffin.ScreenCast",
+                                                           stream_path,
+                                                           NULL,
+                                                           error);
     if (!stream_proxy)
         return FALSE;
 
