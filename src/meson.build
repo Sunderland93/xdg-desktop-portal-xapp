@@ -79,8 +79,6 @@ sources = built_sources + files(
   'appchooserrow.c',
   'background.c',
   'externalwindow.c',
-  'externalwindow-wayland.c',
-  'externalwindow-x11.c',
   'inhibit.c',
   'lockdown.c',
   'request.c',
@@ -91,6 +89,23 @@ sources = built_sources + files(
   'wallpaper.c',
   'xdg-desktop-portal-xapp.c',
 )
+
+common_flags = []
+
+gtk_x11_dep = dependency('gdk-x11-3.0', required: false)
+if gtk_x11_dep.found()
+  sources += files('externalwindow-x11.c')
+  deps += [dependency('x11')]
+  common_flags += ['-DHAVE_GTK_X11']
+endif
+
+gtk_wayland_dep = dependency('gdk-wayland-3.0', required: false)
+if gtk_wayland_dep.found()
+  sources += files('externalwindow-wayland.c')
+  common_flags += ['-DHAVE_GTK_WAYLAND']
+endif
+
+add_project_arguments(common_flags, language: 'c')
 
 executable(
   'xdg-desktop-portal-xapp',
