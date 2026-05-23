@@ -140,6 +140,9 @@ show_more (AppChooserDialog *dialog)
       g_autoptr(GAppInfo) info = G_APP_INFO (g_desktop_app_info_new (desktop_id));
       GtkWidget *row;
 
+      if (info == NULL)
+        continue;
+
       row = GTK_WIDGET (app_chooser_row_new (info));
       gtk_widget_set_visible (row, TRUE);
       gtk_list_box_insert (GTK_LIST_BOX (dialog->list), row, -1);
@@ -416,6 +419,9 @@ app_chooser_dialog_new (const char **choices,
           g_autoptr(GAppInfo) info = G_APP_INFO (g_desktop_app_info_new (desktop_id));
           GtkWidget *row;
 
+          if (info == NULL)
+            continue;
+
           row = GTK_WIDGET (app_chooser_row_new (info));
           gtk_widget_set_visible (row, TRUE);
           gtk_list_box_insert (GTK_LIST_BOX (dialog->list), row, -1);
@@ -481,6 +487,9 @@ app_chooser_dialog_update_choices (AppChooserDialog  *dialog,
           g_autofree char *desktop_id = NULL;
           g_autoptr(GAppInfo) info = NULL;
           GtkWidget *row;
+
+          if (info == NULL)
+            continue;
 
           desktop_id = g_strconcat (choices[i], ".desktop", NULL);
           info = G_APP_INFO (g_desktop_app_info_new (desktop_id));
