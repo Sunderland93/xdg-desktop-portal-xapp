@@ -107,7 +107,17 @@ handle_app_chooser_close (AppChooserDialog *dialog,
     {
       const char *desktop_id = g_app_info_get_id (info);
       handle->response = 0;
-      handle->chosen = g_strndup (desktop_id, strlen (desktop_id) - strlen (".desktop"));
+      if (desktop_id != NULL)
+        {
+          if (g_str_has_suffix (desktop_id, ".desktop"))
+            handle->chosen = g_strndup (desktop_id, strlen (desktop_id) - strlen (".desktop"));
+          else
+            handle->chosen = g_strdup (desktop_id);
+        }
+      else
+        {
+          handle->chosen = NULL;
+        }
     }
   else
     {
